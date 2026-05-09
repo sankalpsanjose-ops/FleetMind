@@ -12,6 +12,8 @@ from backend.game.models import (
 from backend.game.engine import GameEngine
 from backend.game.fleet import FleetManager, FLEET_CONFIG
 from backend.ai.provider import GameContext, get_provider
+import backend.ai.openai_provider      # noqa: F401 — registers "openai"
+import backend.ai.anthropic_provider   # noqa: F401 — registers "anthropic"
 from backend.ml.heatmap import ProbabilityHeatmap
 from backend.ml.qlearning import QLearningAgent
 from backend.ml.trainer import get_agent
