@@ -10,8 +10,10 @@ export interface CreateGameParams {
   player2_type: 'human' | 'ai'
   ai_provider_1?: AIProvider
   ai_mode_1?: AIMode
+  ai_model_1?: string
   ai_provider_2?: AIProvider
   ai_mode_2?: AIMode
+  ai_model_2?: string
   show_reasoning: boolean
 }
 

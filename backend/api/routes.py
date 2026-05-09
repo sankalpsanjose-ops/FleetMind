@@ -19,8 +19,10 @@ class CreateGameRequest(BaseModel):
     player2_type: str = "ai"
     ai_provider_1: str | None = None    # "openai" | "anthropic"
     ai_mode_1: str | None = None        # "pure" | "ml"
+    ai_model_1: str | None = None       # specific model ID
     ai_provider_2: str | None = "anthropic"
     ai_mode_2: str | None = "pure"
+    ai_model_2: str | None = None
     show_reasoning: bool = False
 
 class ShipPlacement(BaseModel):
@@ -72,8 +74,10 @@ async def create_game(
         player2_type=req.player2_type,
         ai_provider_1=req.ai_provider_1,
         ai_mode_1=ai_mode_1,
+        ai_model_1=req.ai_model_1,
         ai_provider_2=req.ai_provider_2,
         ai_mode_2=ai_mode_2,
+        ai_model_2=req.ai_model_2,
         show_reasoning=req.show_reasoning,
     )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import uuid
 import time
+import random as _random
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Awaitable
@@ -43,6 +44,7 @@ class PlayerConfig:
     player_type: str        # "human" | "ai"
     provider_name: str | None = None
     ai_mode: AIMode | None = None
+    model: str | None = None
 
 @dataclass
 class GameSession:
@@ -94,13 +96,15 @@ class GameOrchestrator:
         ai_provider_2: str | None,
         ai_mode_2: AIMode | None,
         show_reasoning: bool = False,
+        ai_model_1: str | None = None,
+        ai_model_2: str | None = None,
     ) -> GameSession:
         game_id = str(uuid.uuid4())
         engine = GameEngine(board_size, difficulty, player1_type, player2_type)
         engine.transition_to_placement()
 
-        p1 = PlayerConfig(player1_type, ai_provider_1, ai_mode_1)
-        p2 = PlayerConfig(player2_type, ai_provider_2, ai_mode_2)
+        p1 = PlayerConfig(player1_type, ai_provider_1, ai_mode_1, ai_model_1)
+        p2 = PlayerConfig(player2_type, ai_provider_2, ai_mode_2, ai_model_2)
 
         session = GameSession(
             game_id=game_id,
@@ -211,26 +215,30 @@ class GameOrchestrator:
 
         await session.emit({"type": "ai_thinking", "side": shooter, "turn": turn_num})
 
-        candidates = self._build_candidates(session, shooter, config.ai_mode)
-        ctx = GameContext(
-            board_size=session.board_size.value,
-            difficulty=session.difficulty,
-            remaining_ship_sizes=self._remaining_ship_sizes(
-                session.engine,
-                "player2" if shooter == "player1" else "player1"
-            ),
-            turn_number=turn_num,
-            show_reasoning=session.show_reasoning,
-        )
-
-        provider = get_provider(config.provider_name)
-        decision = await provider.decide_move(attack_grid, ctx, candidates)
-
-        # Safety fallback: ensure the chosen cell is unknown
-        coord = decision.coordinate
-        if attack_grid.get(coord) != CellState.UNKNOWN:
+        # Cadet: true random — no LLM call, no API cost
+        if session.difficulty == DifficultyMode.CADET:
             unknown = attack_grid.unknown_cells()
-            coord = unknown[0] if unknown else coord
+            coord = _random.choice(unknown) if unknown else unknown[0]
+            decision_reasoning = "Random shot" if session.show_reasoning else None
+        else:
+            candidates = self._build_candidates(session, shooter, config.ai_mode)
+            ctx = GameContext(
+                board_size=session.board_size.value,
+                difficulty=session.difficulty,
+                remaining_ship_sizes=self._remaining_ship_sizes(
+                    session.engine,
+                    "player2" if shooter == "player1" else "player1"
+                ),
+                turn_number=turn_num,
+                show_reasoning=session.show_reasoning,
+            )
+            provider = get_provider(config.provider_name, config.model)
+            decision = await provider.decide_move(attack_grid, ctx, candidates)
+            coord = decision.coordinate
+            decision_reasoning = decision.reasoning
+            if attack_grid.get(coord) != CellState.UNKNOWN:
+                unknown = attack_grid.unknown_cells()
+                coord = unknown[0] if unknown else coord
 
         shot_event = session.engine.fire(shooter, coord)
         turn_after = session.engine.state.turn_number
@@ -247,7 +255,7 @@ class GameOrchestrator:
             "col": coord.col,
             "result": shot_event.result,
             "ship_type": shot_event.ship_type,
-            "reasoning": decision.reasoning,
+            "reasoning": decision_reasoning,
             "turn_number": turn_after,
         }
         await session.emit(event)

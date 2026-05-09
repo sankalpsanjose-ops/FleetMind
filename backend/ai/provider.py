@@ -44,7 +44,7 @@ def register_provider(cls: type[AIProvider]) -> type[AIProvider]:
     _REGISTRY[cls.name] = cls
     return cls
 
-def get_provider(name: str) -> AIProvider:
+def get_provider(name: str, model: str | None = None) -> AIProvider:
     if name not in _REGISTRY:
         raise ValueError(f"Unknown AI provider: {name!r}. Available: {list(_REGISTRY)}")
-    return _REGISTRY[name]()
+    return _REGISTRY[name](model=model)

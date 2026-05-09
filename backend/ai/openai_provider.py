@@ -6,12 +6,16 @@ from backend.ai.move_request import MoveRequestBuilder
 from backend.ai.prompts import get_system_prompt, build_user_message
 from backend.config import settings
 
+# These models use max_completion_tokens and don't accept temperature
+REASONING_MODELS = {"o1", "o3-mini", "o4-mini"}
+DEFAULT_MODEL = "gpt-4o"
+
 @register_provider
 class OpenAIProvider(AIProvider):
     name = "openai"
-    model = "gpt-4o"
 
-    def __init__(self):
+    def __init__(self, model: str | None = None):
+        self.model = model or DEFAULT_MODEL
         self._client = AsyncOpenAI(api_key=settings.openai_api_key or "sk-placeholder")
 
     async def decide_move(
@@ -24,20 +28,29 @@ class OpenAIProvider(AIProvider):
         system_prompt = get_system_prompt(context.difficulty)
         user_message = build_user_message(prompt_ctx)
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=256,
-            temperature=0.3,
-        )
+        if self.model in REASONING_MODELS:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_completion_tokens=2000,
+            )
+        else:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                max_tokens=256,
+                temperature=0.3,
+            )
 
         content = response.choices[0].message.content.strip()
         coordinate = MoveRequestBuilder.parse_coordinate(content, context.board_size)
 
-        # Validate the coordinate is actually unknown — fallback if not
         if attack_grid.get(coordinate).value != "unknown":
             unknown = attack_grid.unknown_cells()
             coordinate = unknown[0] if unknown else coordinate
