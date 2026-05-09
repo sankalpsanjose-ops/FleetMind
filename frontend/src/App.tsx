@@ -35,7 +35,7 @@ export function App() {
       </nav>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden relative">
         {tab === 'game' ? <BattleScreen /> : <MatchHistory />}
       </div>
     </div>

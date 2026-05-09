@@ -21,6 +21,7 @@ class CreateGameRequest(BaseModel):
     ai_mode_1: str | None = None        # "pure" | "ml"
     ai_provider_2: str | None = "anthropic"
     ai_mode_2: str | None = "pure"
+    show_reasoning: bool = False
 
 class ShipPlacement(BaseModel):
     ship_type: str
@@ -73,6 +74,7 @@ async def create_game(
         ai_mode_1=ai_mode_1,
         ai_provider_2=req.ai_provider_2,
         ai_mode_2=ai_mode_2,
+        show_reasoning=req.show_reasoning,
     )
 
     # Record match in DB
@@ -150,27 +152,17 @@ async def fire(
     except Exception as e:
         raise HTTPException(400, str(e))
 
-    # Record shot in DB
+    # Record human shot in DB (AI counter-shot is recorded by orchestrator)
     if session.match_id:
         repo = MatchRepository(db)
         repo.record_shot(
             match_id=session.match_id,
-            turn=session.engine.state.turn_number,
+            turn=event.get("turn_number", session.engine.state.turn_number),
             side="player1",
             coordinate=f"{req.row},{req.col}",
             result=event["result"],
             ship_type_sunk=event.get("ship_type"),
             reasoning=None,
-        )
-
-    # Close match if game over
-    if session.engine.state.phase.value == "game_over" and session.match_id:
-        repo = MatchRepository(db)
-        repo.close_match(
-            match_id=session.match_id,
-            winner=session.engine.state.winner,
-            total_turns=session.engine.state.turn_number,
-            duration_seconds=__import__("time").time() - session.start_time,
         )
 
     return event

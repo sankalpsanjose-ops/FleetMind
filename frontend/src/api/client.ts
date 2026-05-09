@@ -12,7 +12,7 @@ export interface CreateGameParams {
   ai_mode_1?: AIMode
   ai_provider_2?: AIProvider
   ai_mode_2?: AIMode
-  show_reasoning?: boolean
+  show_reasoning: boolean
 }
 
 export interface CreateGameResponse {
@@ -34,7 +34,7 @@ export const gameApi = {
     api.post<CreateGameResponse>('/games', params).then(r => r.data),
 
   placeFleet: (gameId: string, ships: ShipPlacement[]) =>
-    api.post<{ success: boolean }>(`/games/${gameId}/placement`, { ships }).then(r => r.data),
+    api.post<{ phase: string; message: string }>(`/games/${gameId}/placement`, { ships }).then(r => r.data),
 
   fire: (gameId: string, row: number, col: number) =>
     api.post<FireResponse>(`/games/${gameId}/fire`, { row, col }).then(r => r.data),

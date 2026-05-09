@@ -54,6 +54,7 @@ class GameSession:
     player2: PlayerConfig
     match_id: int | None = None
     start_time: float = field(default_factory=time.time)
+    show_reasoning: bool = False
     # Per-side ML state
     heatmap_p1: ProbabilityHeatmap | None = None
     heatmap_p2: ProbabilityHeatmap | None = None
@@ -92,6 +93,7 @@ class GameOrchestrator:
         ai_mode_1: AIMode | None,
         ai_provider_2: str | None,
         ai_mode_2: AIMode | None,
+        show_reasoning: bool = False,
     ) -> GameSession:
         game_id = str(uuid.uuid4())
         engine = GameEngine(board_size, difficulty, player1_type, player2_type)
@@ -107,6 +109,7 @@ class GameOrchestrator:
             difficulty=difficulty,
             player1=p1,
             player2=p2,
+            show_reasoning=show_reasoning,
         )
 
         # Initialize ML heatmaps for sides that use them
@@ -141,18 +144,22 @@ class GameOrchestrator:
     async def place_human_fleet(self, game_id: str, ships: list[dict]) -> None:
         session = self.get_session(game_id)
         from backend.game.models import FleetState, Ship
-        fleet = FleetState(size=session.board_size.value)
         manager = FleetManager(
             board_size=session.board_size.value,
             require_gap=session.difficulty in DIFFICULTY_REQUIRES_GAP
         )
-        for s in ships:
-            ship = Ship(
-                ship_type=ShipType(s["ship_type"]),
-                orientation=Orientation(s["orientation"]),
-                bow=Coordinate(s["row"], s["col"]),
-            )
-            manager.place_ship(fleet, ship)
+        # Empty ships list = server-side random placement
+        if not ships:
+            fleet = manager.place_fleet_random(session.difficulty, session.board_size)
+        else:
+            fleet = FleetState(size=session.board_size.value)
+            for s in ships:
+                ship = Ship(
+                    ship_type=ShipType(s["ship_type"]),
+                    orientation=Orientation(s["orientation"]),
+                    bow=Coordinate(s["row"], s["col"]),
+                )
+                manager.place_ship(fleet, ship)
         # Determine which side is human
         side = "player1" if session.player1.player_type == "human" else "player2"
         session.engine.set_fleet(side, fleet)
@@ -200,9 +207,9 @@ class GameOrchestrator:
         """Execute one AI turn. Returns shot event dict."""
         config = session.player1 if shooter == "player1" else session.player2
         attack_grid = session.engine.get_attack_grid_for_ai(shooter)
+        turn_num = session.engine.state.turn_number
 
-        await session.emit({"type": "ai_thinking", "side": shooter,
-                            "turn": session.engine.state.turn_number})
+        await session.emit({"type": "ai_thinking", "side": shooter, "turn": turn_num})
 
         candidates = self._build_candidates(session, shooter, config.ai_mode)
         ctx = GameContext(
@@ -212,20 +219,21 @@ class GameOrchestrator:
                 session.engine,
                 "player2" if shooter == "player1" else "player1"
             ),
-            turn_number=session.engine.state.turn_number,
-            show_reasoning=False,
+            turn_number=turn_num,
+            show_reasoning=session.show_reasoning,
         )
 
         provider = get_provider(config.provider_name)
         decision = await provider.decide_move(attack_grid, ctx, candidates)
 
-        # Ensure the coordinate is unknown (safety fallback)
+        # Safety fallback: ensure the chosen cell is unknown
         coord = decision.coordinate
         if attack_grid.get(coord) != CellState.UNKNOWN:
             unknown = attack_grid.unknown_cells()
             coord = unknown[0] if unknown else coord
 
         shot_event = session.engine.fire(shooter, coord)
+        turn_after = session.engine.state.turn_number
 
         # Update ML state
         heatmap = session.heatmap_p1 if shooter == "player1" else session.heatmap_p2
@@ -240,6 +248,7 @@ class GameOrchestrator:
             "result": shot_event.result,
             "ship_type": shot_event.ship_type,
             "reasoning": decision.reasoning,
+            "turn_number": turn_after,
         }
         await session.emit(event)
 
@@ -249,7 +258,7 @@ class GameOrchestrator:
 
         if session.engine.state.phase == GamePhase.GAME_OVER:
             await session.emit({"type": "game_over", "winner": session.engine.state.winner,
-                                "total_turns": session.engine.state.turn_number})
+                                "total_turns": turn_after})
 
         return event
 
@@ -258,6 +267,7 @@ class GameOrchestrator:
         session = self.get_session(game_id)
         coord = Coordinate(row, col)
         shot_event = session.engine.fire("player1", coord)
+        turn_after = session.engine.state.turn_number
 
         heatmap = session.heatmap_p1
         if heatmap:
@@ -271,38 +281,75 @@ class GameOrchestrator:
             "result": shot_event.result,
             "ship_type": shot_event.ship_type,
             "reasoning": None,
+            "turn_number": turn_after,
         }
         await session.emit(event)
 
         if session.engine.state.phase == GamePhase.GAME_OVER:
             await session.emit({"type": "game_over", "winner": session.engine.state.winner,
-                                "total_turns": session.engine.state.turn_number})
+                                "total_turns": turn_after})
+            self._close_match_db(session)
             return event
 
         # Trigger AI counter-turn
         if session.engine.state.current_turn == "player2" and session.player2.player_type == "ai":
-            await self._run_ai_turn(session, "player2")
+            ai_event = await self._run_ai_turn(session, "player2")
+            if session.engine.state.phase == GamePhase.GAME_OVER:
+                self._close_match_db(session)
 
         return event
 
     async def run_ai_vs_ai(self, game_id: str) -> None:
         """Run a full AI vs AI game, emitting events along the way."""
+        from backend.db.database import SessionLocal
+        from backend.db.repository import MatchRepository as Repo
+
         session = self.get_session(game_id)
         while session.engine.state.phase == GamePhase.BATTLE:
             current = session.engine.state.current_turn
-            await self._run_ai_turn(session, current)
+            event = await self._run_ai_turn(session, current)
+            # Record shot in DB
+            if session.match_id:
+                with SessionLocal() as db:
+                    Repo(db).record_shot(
+                        match_id=session.match_id,
+                        turn=session.engine.state.turn_number,
+                        side=event["side"],
+                        coordinate=f"{event['row']},{event['col']}",
+                        result=event["result"],
+                        ship_type_sunk=event.get("ship_type"),
+                        reasoning=event.get("reasoning"),
+                    )
+
+        if session.engine.state.phase == GamePhase.GAME_OVER:
+            self._close_match_db(session)
+
+    def _close_match_db(self, session: GameSession) -> None:
+        if not session.match_id:
+            return
+        from backend.db.database import SessionLocal
+        from backend.db.repository import MatchRepository as Repo
+        try:
+            with SessionLocal() as db:
+                Repo(db).close_match(
+                    match_id=session.match_id,
+                    winner=session.engine.state.winner,
+                    total_turns=session.engine.state.turn_number,
+                    duration_seconds=time.time() - session.start_time,
+                )
+        except Exception:
+            pass  # Don't crash game loop on DB failure
 
     def get_state(self, game_id: str) -> dict:
         session = self.get_session(game_id)
         engine = session.engine
-        size = session.board_size.value
 
-        def serialize_grid(grid):
+        # Only serialize non-unknown cells to keep payload small
+        def serialize_grid(attack_grid):
             return {
-                f"{r},{c}": engine.state.attack_p1.get(Coordinate(r, c)).value
-                if grid == "p1" else
-                engine.state.attack_p2.get(Coordinate(r, c)).value
-                for r in range(size) for c in range(size)
+                f"{coord.row},{coord.col}": state.value
+                for coord, state in attack_grid.cells.items()
+                if state.value != "unknown"
             }
 
         return {
@@ -312,8 +359,8 @@ class GameOrchestrator:
             "turn_number": engine.state.turn_number,
             "winner": engine.state.winner,
             "attack_grid": {
-                "player1": serialize_grid("p1"),
-                "player2": serialize_grid("p2"),
+                "player1": serialize_grid(engine.state.attack_p1),
+                "player2": serialize_grid(engine.state.attack_p2),
             },
         }
 
