@@ -6,7 +6,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./fleetmind.db"
     debug: bool = False
 
-    class Config:
-        env_file = ".env"
+    model_config = {"env_file": ".env"}
 
 settings = Settings()
