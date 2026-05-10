@@ -60,6 +60,8 @@ class GameSession:
     # Per-side ML state
     heatmap_p1: ProbabilityHeatmap | None = None
     heatmap_p2: ProbabilityHeatmap | None = None
+    # Guard against duplicate run_ai_vs_ai tasks
+    _ai_running: bool = False
     # Event callbacks registered by WebSocket handler
     _event_callbacks: list[Callable] = field(default_factory=list)
 
@@ -221,24 +223,31 @@ class GameOrchestrator:
             coord = _random.choice(unknown) if unknown else unknown[0]
             decision_reasoning = "Random shot" if session.show_reasoning else None
         else:
-            candidates = self._build_candidates(session, shooter, config.ai_mode)
-            ctx = GameContext(
-                board_size=session.board_size.value,
-                difficulty=session.difficulty,
-                remaining_ship_sizes=self._remaining_ship_sizes(
-                    session.engine,
-                    "player2" if shooter == "player1" else "player1"
-                ),
-                turn_number=turn_num,
-                show_reasoning=session.show_reasoning,
-            )
-            provider = get_provider(config.provider_name, config.model)
-            decision = await provider.decide_move(attack_grid, ctx, candidates)
-            coord = decision.coordinate
-            decision_reasoning = decision.reasoning
-            if attack_grid.get(coord) != CellState.UNKNOWN:
-                unknown = attack_grid.unknown_cells()
-                coord = unknown[0] if unknown else coord
+            coord = None
+            decision_reasoning = None
+            try:
+                candidates = self._build_candidates(session, shooter, config.ai_mode)
+                ctx = GameContext(
+                    board_size=session.board_size.value,
+                    difficulty=session.difficulty,
+                    remaining_ship_sizes=self._remaining_ship_sizes(
+                        session.engine,
+                        "player2" if shooter == "player1" else "player1"
+                    ),
+                    turn_number=turn_num,
+                    show_reasoning=session.show_reasoning,
+                )
+                provider = get_provider(config.provider_name, config.model)
+                decision = await provider.decide_move(attack_grid, ctx, candidates)
+                coord = decision.coordinate
+                decision_reasoning = decision.reasoning
+            except Exception as exc:
+                await session.emit({"type": "error", "message": f"AI turn error ({shooter}): {exc}"})
+
+            # Fallback to random if LLM failed or returned an already-fired cell
+            unknown = attack_grid.unknown_cells()
+            if coord is None or attack_grid.get(coord) != CellState.UNKNOWN:
+                coord = _random.choice(unknown) if unknown else (coord or unknown[0])
 
         shot_event = session.engine.fire(shooter, coord)
         turn_after = session.engine.state.turn_number
@@ -257,6 +266,8 @@ class GameOrchestrator:
             "ship_type": shot_event.ship_type,
             "reasoning": decision_reasoning,
             "turn_number": turn_after,
+            "current_turn": session.engine.state.current_turn,
+            "phase": session.engine.state.phase.value,
         }
         await session.emit(event)
 
@@ -290,6 +301,8 @@ class GameOrchestrator:
             "ship_type": shot_event.ship_type,
             "reasoning": None,
             "turn_number": turn_after,
+            "current_turn": session.engine.state.current_turn,
+            "phase": session.engine.state.phase.value,
         }
         await session.emit(event)
 
@@ -309,25 +322,51 @@ class GameOrchestrator:
 
     async def run_ai_vs_ai(self, game_id: str) -> None:
         """Run a full AI vs AI game, emitting events along the way."""
+        import asyncio
         from backend.db.database import SessionLocal
         from backend.db.repository import MatchRepository as Repo
 
-        session = self.get_session(game_id)
-        while session.engine.state.phase == GamePhase.BATTLE:
-            current = session.engine.state.current_turn
-            event = await self._run_ai_turn(session, current)
-            # Record shot in DB
-            if session.match_id:
-                with SessionLocal() as db:
-                    Repo(db).record_shot(
-                        match_id=session.match_id,
-                        turn=session.engine.state.turn_number,
-                        side=event["side"],
-                        coordinate=f"{event['row']},{event['col']}",
-                        result=event["result"],
-                        ship_type_sunk=event.get("ship_type"),
-                        reasoning=event.get("reasoning"),
-                    )
+        try:
+            session = self.get_session(game_id)
+        except KeyError:
+            return
+
+        # Prevent duplicate loops (server auto-start + client message both call this)
+        if session._ai_running:
+            return
+        session._ai_running = True
+
+        try:
+            while session.engine.state.phase == GamePhase.BATTLE:
+                current = session.engine.state.current_turn
+                event = await self._run_ai_turn(session, current)
+
+                # Record shot in DB — swallow errors so the game loop keeps going
+                if session.match_id:
+                    try:
+                        with SessionLocal() as db:
+                            Repo(db).record_shot(
+                                match_id=session.match_id,
+                                turn=session.engine.state.turn_number,
+                                side=event["side"],
+                                coordinate=f"{event['row']},{event['col']}",
+                                result=event["result"],
+                                ship_type_sunk=event.get("ship_type"),
+                                reasoning=event.get("reasoning"),
+                            )
+                    except Exception:
+                        pass
+
+                # Yield to event loop so WS frames are flushed before next turn
+                await asyncio.sleep(0.1)
+
+        except Exception as exc:
+            try:
+                await session.emit({"type": "error", "message": f"AI vs AI crashed: {exc}"})
+            except Exception:
+                pass
+        finally:
+            session._ai_running = False
 
         if session.engine.state.phase == GamePhase.GAME_OVER:
             self._close_match_db(session)

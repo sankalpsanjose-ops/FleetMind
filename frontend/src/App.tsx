@@ -11,6 +11,7 @@ export function App() {
     <div className="flex flex-col h-screen bg-cyber-bg text-cyber-cyan font-mono overflow-hidden">
       {/* Top nav */}
       <nav className="flex items-center gap-1 px-4 py-2 border-b border-cyber-border shrink-0">
+        <span className="text-base mr-1.5 select-none" style={{ textShadow: '0 0 12px rgba(0,255,180,0.7)' }}>⚓</span>
         <span className="text-xs font-bold tracking-[0.3em] text-shadow-cyan mr-6">
           FLEET<span className="text-cyber-blue">MIND</span>
         </span>

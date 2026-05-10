@@ -77,9 +77,13 @@ export function useGame() {
             isAiThinking: false,
             _turnCounter: turnNum,
             log: [...prev.log, entry],
-            state: prev.state
-              ? { ...prev.state, attack_grid: mergeGrid(grid, side, event.row, event.col, event.result) }
-              : prev.state,
+            state: prev.state ? {
+              ...prev.state,
+              attack_grid: mergeGrid(grid, side, event.row, event.col, event.result),
+              current_turn: (event.current_turn as 'player1' | 'player2' | undefined) ?? prev.state.current_turn,
+              phase: event.phase ?? prev.state.phase,
+              turn_number: turnNum,
+            } : prev.state,
           }
         }
 
@@ -165,6 +169,20 @@ export function useGame() {
     send({ action: 'get_state' })
   }, [send])
 
+  // Clears all state and closes the WebSocket (gameId → null triggers WS cleanup)
+  const resetGame = useCallback(() => {
+    setStore(EMPTY)
+  }, [])
+
+  // Records loss in DB then resets
+  const forfeit = useCallback(async () => {
+    const id = store.gameId
+    setStore(EMPTY)           // close WS immediately, don't wait for network
+    if (id) {
+      try { await gameApi.forfeit(id) } catch { /* already over or not found */ }
+    }
+  }, [store.gameId])
+
   // Expose without internal _turnCounter
   const { _turnCounter: _tc, ...publicStore } = store
   return {
@@ -174,5 +192,7 @@ export function useGame() {
     humanFire,
     startAiVsAi,
     requestState,
+    resetGame,
+    forfeit,
   }
 }

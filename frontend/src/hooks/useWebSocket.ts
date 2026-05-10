@@ -17,8 +17,13 @@ export function useWebSocket(gameId: string | null, onEvent: Handler) {
   useEffect(() => {
     if (!gameId) return
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/games/${gameId}`)
+    // In prod: derive wss:// from VITE_API_URL (https://... → wss://...)
+    // In dev: fall back to same-host (Vite proxy handles /ws)
+    const apiUrl = import.meta.env.VITE_API_URL as string | undefined
+    const wsBase = apiUrl
+      ? apiUrl.replace(/^http/, 'ws')
+      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+    const ws = new WebSocket(`${wsBase}/ws/games/${gameId}`)
     wsRef.current = ws
 
     ws.onmessage = (e) => {

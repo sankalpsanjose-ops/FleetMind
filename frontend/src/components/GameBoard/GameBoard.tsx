@@ -5,8 +5,10 @@ import type { CellState } from '../../types/game'
 interface Props {
   boardSize: number
   attackGrid: Record<string, CellState>
+  ownFleetGrid?: Record<string, boolean>  // show player's own ship positions
   side: 'player1' | 'player2'
   label: string
+  active?: boolean                         // highlight as current turn
   onCellClick?: (row: number, col: number) => void
   interactive?: boolean
 }
@@ -22,15 +24,17 @@ const COLORS = {
   unknown: 0x011822,
 }
 
-export function GameBoard({ boardSize, attackGrid, label, onCellClick, interactive = false }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const appRef       = useRef<PIXI.Application | null>(null)
-  const cellsRef     = useRef<PIXI.Graphics[][]>([])
-  const particlesRef = useRef<PIXI.Container | null>(null)
-  // Always-current ref so PixiJS event handlers never close over stale props
-  const gridRef      = useRef<Record<string, CellState>>(attackGrid)
-  const prevGridRef  = useRef<Record<string, CellState>>({})
-  gridRef.current    = attackGrid
+export function GameBoard({ boardSize, attackGrid, ownFleetGrid, label, active = false, onCellClick, interactive = false }: Props) {
+  const containerRef  = useRef<HTMLDivElement>(null)
+  const appRef        = useRef<PIXI.Application | null>(null)
+  const cellsRef      = useRef<PIXI.Graphics[][]>([])
+  const particlesRef  = useRef<PIXI.Container | null>(null)
+  // Always-current refs so PixiJS event handlers never close over stale props
+  const gridRef       = useRef<Record<string, CellState>>(attackGrid)
+  const fleetRef      = useRef<Record<string, boolean>>(ownFleetGrid ?? {})
+  const prevGridRef   = useRef<Record<string, CellState>>({})
+  gridRef.current     = attackGrid
+  fleetRef.current    = ownFleetGrid ?? {}
 
   // ── Init PixiJS once per boardSize ──────────────────────────────────────
   useEffect(() => {
@@ -107,7 +111,7 @@ export function GameBoard({ boardSize, attackGrid, label, onCellClick, interacti
     }
   }, [boardSize]) // eslint-disable-line
 
-  // ── Sync cells when grid changes ────────────────────────────────────────
+  // ── Sync cells when grid or fleet changes ───────────────────────────────
   useEffect(() => {
     if (!appRef.current || cellsRef.current.length === 0) return
     const size     = containerRef.current?.clientWidth || 480
@@ -115,14 +119,15 @@ export function GameBoard({ boardSize, attackGrid, label, onCellClick, interacti
 
     for (let r = 0; r < boardSize; r++) {
       for (let c = 0; c < boardSize; c++) {
-        const key      = `${r},${c}`
-        const state    = attackGrid[key] || 'unknown'
+        const key       = `${r},${c}`
+        const state     = attackGrid[key] || 'unknown'
         const prevState = prevGridRef.current[key] || 'unknown'
-        const cell     = cellsRef.current[r]?.[c]
+        const hasShip   = fleetRef.current[key] ?? false
+        const cell      = cellsRef.current[r]?.[c]
         if (!cell) continue
 
-        if (state !== prevState) {
-          drawCell(cell, cellSize, state)
+        if (state !== prevState || (state === 'unknown' && hasShip)) {
+          drawCell(cell, cellSize, state, hasShip)
           if ((state === 'hit' || state === 'sunk') && prevState !== 'hit' && prevState !== 'sunk') {
             spawnParticles(r, c, cellSize, state)
           }
@@ -130,22 +135,35 @@ export function GameBoard({ boardSize, attackGrid, label, onCellClick, interacti
       }
     }
     prevGridRef.current = { ...attackGrid }
-  }, [attackGrid, boardSize]) // eslint-disable-line
+  }, [attackGrid, ownFleetGrid, boardSize]) // eslint-disable-line
 
   // ─────────────────────────────────────────────────────────────────────────
 
-  function drawCell(cell: PIXI.Graphics, cellSize: number, state: CellState | 'hover') {
+  function drawCell(cell: PIXI.Graphics, cellSize: number, state: CellState | 'hover', hasShip = false) {
     cell.clear()
     const pad = 2
 
     switch (state) {
       case 'unknown':
-        cell.beginFill(COLORS.unknown, 0.8)
-        cell.drawRect(pad, pad, cellSize - pad * 2, cellSize - pad * 2)
-        cell.endFill()
-        cell.beginFill(0x004433, 0.3)
-        cell.drawCircle(cellSize / 2, cellSize / 2, 1.5)
-        cell.endFill()
+        if (hasShip) {
+          // Friendly ship — dim blue so player knows where they placed
+          cell.beginFill(0x001a3a, 0.95)
+          cell.drawRect(pad, pad, cellSize - pad * 2, cellSize - pad * 2)
+          cell.endFill()
+          cell.lineStyle(1, 0x0088cc, 0.55)
+          cell.drawRect(pad + 2, pad + 2, cellSize - pad * 2 - 4, cellSize - pad * 2 - 4)
+          cell.lineStyle(0)
+          cell.beginFill(0x0066aa, 0.4)
+          cell.drawRect(pad + 4, pad + 4, cellSize - pad * 2 - 8, cellSize - pad * 2 - 8)
+          cell.endFill()
+        } else {
+          cell.beginFill(COLORS.unknown, 0.8)
+          cell.drawRect(pad, pad, cellSize - pad * 2, cellSize - pad * 2)
+          cell.endFill()
+          cell.beginFill(0x004433, 0.3)
+          cell.drawCircle(cellSize / 2, cellSize / 2, 1.5)
+          cell.endFill()
+        }
         break
 
       case 'hover':
@@ -225,10 +243,20 @@ export function GameBoard({ boardSize, attackGrid, label, onCellClick, interacti
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="hud-label text-center tracking-[0.3em]">{label}</div>
+      <div className={`text-center tracking-[0.2em] text-[10px] uppercase font-mono flex items-center justify-center gap-1.5 transition-colors
+        ${active ? 'text-cyber-cyan' : 'text-cyber-dim'}`}>
+        {active && (
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyber-cyan animate-pulse-glow" />
+        )}
+        {label}
+      </div>
       <div
         ref={containerRef}
-        className="w-full aspect-square border border-cyber-border rounded-sm overflow-hidden"
+        className={`w-full aspect-square rounded-sm overflow-hidden transition-all duration-300
+          ${active
+            ? 'border border-cyber-cyan shadow-cyan-glow'
+            : 'border border-cyber-border'
+          }`}
         style={{ imageRendering: 'pixelated' }}
       />
     </div>

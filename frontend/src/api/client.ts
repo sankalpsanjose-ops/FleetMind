@@ -1,7 +1,11 @@
 import axios from 'axios'
 import type { GameState, MatchRecord, WinRates, ShipPlacement, BoardSize, Difficulty, AIMode, AIProvider } from '../types/game'
 
-const api = axios.create({ baseURL: '/' })
+// In dev: empty string → Vite proxy handles routing to localhost:8000
+// In prod (Vercel): set VITE_API_URL to the Render backend URL
+const API_BASE = import.meta.env.VITE_API_URL ?? ''
+
+const api = axios.create({ baseURL: API_BASE })
 
 export interface CreateGameParams {
   board_size: BoardSize
@@ -40,6 +44,9 @@ export const gameApi = {
 
   fire: (gameId: string, row: number, col: number) =>
     api.post<FireResponse>(`/games/${gameId}/fire`, { row, col }).then(r => r.data),
+
+  forfeit: (gameId: string) =>
+    api.post<{ forfeited: boolean; winner: string }>(`/games/${gameId}/forfeit`).then(r => r.data),
 
   getState: (gameId: string) =>
     api.get<GameState>(`/games/${gameId}/state`).then(r => r.data),

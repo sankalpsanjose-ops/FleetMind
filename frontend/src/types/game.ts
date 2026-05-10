@@ -36,7 +36,7 @@ export interface GameState {
 export type WSEvent =
   | { type: 'connected'; game_id: string; phase: GamePhase; board_size: number; difficulty: string }
   | { type: 'ai_thinking'; side: string; turn: number }
-  | { type: 'shot_fired'; side: string; row: number; col: number; result: CellState; ship_type: string | null; reasoning: string | null; turn_number?: number }
+  | { type: 'shot_fired'; side: string; row: number; col: number; result: CellState; ship_type: string | null; reasoning: string | null; turn_number?: number; current_turn?: string; phase?: GamePhase }
   | { type: 'ship_sunk'; side: string; ship_type: string }
   | { type: 'game_over'; winner: string; total_turns: number }
   | { type: 'state'; phase: GamePhase; current_turn: string; turn_number: number; winner: string | null; attack_grid: AttackGrid }

@@ -41,6 +41,13 @@ async def game_ws_endpoint(websocket: WebSocket, game_id: str):
         "difficulty": session.difficulty.value,
     })
 
+    # Auto-start AI vs AI without waiting for client message — the client sends
+    # start_ai_vs_ai before the WS handshake completes, so the message is dropped.
+    if (session.player1.player_type == "ai"
+            and session.player2.player_type == "ai"
+            and session.engine.state.phase == GamePhase.BATTLE):
+        asyncio.create_task(orchestrator.run_ai_vs_ai(game_id))
+
     try:
         while True:
             # Wait for client messages

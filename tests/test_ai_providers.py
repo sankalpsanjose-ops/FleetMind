@@ -76,7 +76,7 @@ async def test_openai_provider_includes_reasoning_when_enabled():
 
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = "Probability mass at (2,3)."
+    mock_response.choices[0].message.content = "REASON: Probability mass is concentrated at (2,3).\nFIRE: 2,3"
 
     with patch.object(provider._client.chat.completions, "create",
                       new=AsyncMock(return_value=mock_response)):
@@ -93,9 +93,11 @@ async def test_anthropic_provider_returns_valid_coordinate():
     grid = fresh_grid()
     ctx = make_context()
 
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "REASON: High probability cluster near (8,1).\nFIRE: 8,1"
     mock_response = MagicMock()
-    mock_response.content = [MagicMock()]
-    mock_response.content[0].text = "Based on the board, I'll fire at (8,1)."
+    mock_response.content = [text_block]
 
     with patch.object(provider._client.messages, "create",
                       new=AsyncMock(return_value=mock_response)):

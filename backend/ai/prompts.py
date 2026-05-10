@@ -1,64 +1,81 @@
 from backend.game.models import DifficultyMode
 
+# For models with extended thinking — minimal guardrails, let it reason freely.
+# The soft nudge about active hits is still useful: even 10k thinking tokens can
+# miss obvious follow-ups when the board is noisy with many misses.
+_FORMAT_THINKING = """
+Note: if active hits (unsunk) are present, strongly consider firing adjacent to them.
+
+Respond in EXACTLY this format (two lines):
+REASON: <one sentence summarising your conclusion>
+FIRE: <row,col>"""
+
+# For single-pass models — a priority nudge so they don't ignore active hits.
+_FORMAT_STANDARD = """
+Priority: if active hits (unsunk) exist, fire adjacent to one of them before hunting elsewhere.
+
+Respond in EXACTLY this format (two lines):
+REASON: <one tactical sentence explaining your choice>
+FIRE: <row,col>"""
+
 SYSTEM_PROMPTS: dict[DifficultyMode, str] = {
-    DifficultyMode.CADET: """You are playing Battleship. Play casually and make suboptimal choices.
-Pick coordinates somewhat randomly without much strategic reasoning.
-Do not use probability theory or pattern recognition. Just pick a cell that seems reasonable.
-Respond with ONLY the coordinate in format (row,col). Example: (3,5)""",
+    DifficultyMode.CADET: (
+        "You are playing Battleship casually. Make reasonable but suboptimal choices. "
+        "Avoid complex probability — just pick cells that seem okay."
+    ),
 
-    DifficultyMode.COMMANDER: """You are playing Battleship. Apply probability-based targeting.
-Use the hunt-and-target strategy: when you have no hits, target cells evenly spread across
-the board. When you have hits, focus shots adjacent to them to find the ship's orientation
-and sink it. Consider that ships cannot overlap.
-Respond with ONLY the coordinate in format (row,col). Example: (3,5)""",
+    DifficultyMode.COMMANDER: (
+        "You are playing Battleship with the hunt-and-target strategy.\n"
+        "Hunt mode (no active hits): spread shots across the board.\n"
+        "Target mode (active hits): fire adjacent to hit cells to find the axis, then follow it to sink the ship."
+    ),
 
-    DifficultyMode.ADMIRAL: """You are playing Battleship as an Admiral. Use advanced strategy:
-1. Apply parity — the smallest remaining ship requires adjacent cells to be reachable.
-2. In hunt mode, prefer cells that maximize the number of valid ship placements through them.
-3. In target mode (after a hit), fire along the axis of confirmed hits to sink the ship.
-4. You have one radar ping available — use it strategically if given the option.
-The ML candidates provided are the top probability cells. You may follow or override them.
-Respond with ONLY the coordinate in format (row,col). Example: (3,5)""",
+    DifficultyMode.ADMIRAL: (
+        "You are playing Battleship as an Admiral. Use advanced strategy:\n"
+        "1. Parity: skip cells no remaining ship can reach.\n"
+        "2. Hunt mode: prefer cells that maximise valid ship placements.\n"
+        "3. Target mode: lock onto the confirmed hit axis and follow it until the ship is sunk.\n"
+        "ML candidates show the top-probability cells — follow or override with justification."
+    ),
 
-    DifficultyMode.WAR_VETERAN: """You are a battle-hardened Battleship veteran. Play at the highest strategic level:
-1. Use probability density analysis — count valid placements for each remaining ship size.
-2. Apply strict parity filtering to eliminate unreachable cells.
-3. After any hit, lock onto the axis and fire systematically to sink before moving on.
-4. Account for human tendencies: people rarely place ships in corners or edges, prefer
-   horizontal orientation, and avoid placing ships adjacent to each other.
-5. The ML candidates represent the statistically optimal moves — treat them as strong signals.
-Respond with ONLY the coordinate in format (row,col). Example: (3,5)""",
+    DifficultyMode.WAR_VETERAN: (
+        "You are a battle-hardened Battleship veteran.\n"
+        "1. Probability density — count valid placements per cell for each remaining ship size.\n"
+        "2. Strict parity filtering — eliminate cells no ship can reach.\n"
+        "3. Hit axis locking — never deviate from a partially-sunk ship until fully sunk.\n"
+        "4. Exploit tendencies: ships rarely in corners, prefer horizontal, avoid adjacency.\n"
+        "ML candidates are statistically optimal — treat them as strong signals."
+    ),
 
-    DifficultyMode.BLACK_OPS: """You are a ghost operative playing Battleship in blackout conditions.
-Apply every strategic technique available:
-1. Maximum probability density targeting — fire where the most ship placements converge.
-2. Strict parity and constraint propagation after every shot.
-3. Aggressive axis locking after hits — never deviate until the ship is sunk.
-4. Exploit any behavioral patterns you can infer from the shot history.
-5. The ML candidates are your tactical intelligence — weight them heavily.
-Be ruthless and optimal. Every miss is a wasted opportunity.
-Respond with ONLY the coordinate in format (row,col). Example: (3,5)""",
+    DifficultyMode.BLACK_OPS: (
+        "You are a ghost operative in Battleship blackout conditions. Apply everything:\n"
+        "1. Maximum probability density — fire where ship placements converge.\n"
+        "2. Parity and constraint propagation after every shot.\n"
+        "3. Aggressive axis locking — never deviate from a partially-sunk ship.\n"
+        "4. Exploit any behavioural patterns visible in the shot history.\n"
+        "ML candidates are your intelligence — weight them heavily. Be ruthless."
+    ),
 
-    DifficultyMode.ARMADA: """You are commanding a large fleet in a Battleship engagement.
-Apply sound tactical reasoning: probability-based targeting, hit axis exploitation,
-and systematic coverage of the board. The fleet is large, so manage your shots efficiently.
-The ML candidates show the highest-probability targets.
-Respond with ONLY the coordinate in format (row,col). Example: (3,5)""",
+    DifficultyMode.ARMADA: (
+        "You are commanding a large fleet engagement. Apply probability-based targeting, "
+        "hit axis exploitation, and systematic board coverage. Finish each partially-sunk "
+        "ship before moving on. ML candidates show the highest-probability targets."
+    ),
 
-    DifficultyMode.GUERRILLA: """You are playing asymmetric Battleship. Your opponent has a very different
-fleet configuration than yours. Adapt your strategy accordingly:
-- If hunting a large ship (Carrier): concentrate fire in central regions, large ships rarely
-  fit near edges. Use long horizontal or vertical scan lines.
-- If hunting many small ships: apply strict parity, small ships can hide in any corner.
-Use probability reasoning to find ships efficiently given the asymmetric fleet.
-Respond with ONLY the coordinate in format (row,col). Example: (3,5)""",
+    DifficultyMode.GUERRILLA: (
+        "You are playing asymmetric Battleship. Adapt your strategy:\n"
+        "- Hunting a large ship (Carrier): concentrate fire centrally with long scan lines.\n"
+        "- Hunting many small ships: apply strict parity — they hide in any corner.\n"
+        "Use probability reasoning for the asymmetric fleet composition."
+    ),
 }
 
-def get_system_prompt(difficulty: DifficultyMode) -> str:
-    return SYSTEM_PROMPTS[difficulty]
+def get_system_prompt(difficulty: DifficultyMode, thinking: bool = False) -> str:
+    base = SYSTEM_PROMPTS[difficulty]
+    fmt  = _FORMAT_THINKING if thinking else _FORMAT_STANDARD
+    return base + "\n" + fmt
 
 def build_user_message(prompt_ctx: dict) -> str:
-    """Construct the per-turn user message from the prompt context dict."""
     lines = [
         f"Board size: {prompt_ctx['board_size']}x{prompt_ctx['board_size']}",
         f"Turn: {prompt_ctx['turn_number']}",
@@ -70,9 +87,5 @@ def build_user_message(prompt_ctx: dict) -> str:
         prompt_ctx["grid_text"],
     ]
     if "ml_candidates" in prompt_ctx:
-        lines += [
-            "",
-            f"Top ML candidates (highest probability): {prompt_ctx['ml_candidates']}",
-        ]
-    lines += ["", "Choose your next shot coordinate (row,col):"]
+        lines += ["", f"Top ML candidates (highest probability): {prompt_ctx['ml_candidates']}"]
     return "\n".join(lines)

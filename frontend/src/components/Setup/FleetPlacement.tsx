@@ -15,15 +15,18 @@ const STANDARD_FLEET: ShipDef[] = [
   { ship_type: 'patrol',     size: 2, label: 'Patrol' },
 ]
 
+const SHIP_SIZES: Record<string, number> = {
+  carrier: 5, battleship: 4, cruiser: 3, submarine: 3, patrol: 2,
+}
+
 interface Props {
   boardSize: number
   onConfirm: (placements: ShipPlacement[]) => void
-  onRandomize: () => void
 }
 
 interface CellPos { row: number; col: number }
 
-export function FleetPlacement({ boardSize, onConfirm, onRandomize }: Props) {
+export function FleetPlacement({ boardSize, onConfirm }: Props) {
   const [placements, setPlacements] = useState<ShipPlacement[]>([])
   const [selected, setSelected] = useState<ShipDef | null>(STANDARD_FLEET[0])
   const [orientation, setOrientation] = useState<Orientation>('horizontal')
@@ -79,6 +82,38 @@ export function FleetPlacement({ boardSize, onConfirm, onRandomize }: Props) {
     setPlacements(prev => prev.slice(0, -1))
     const ship = STANDARD_FLEET.find(s => s.ship_type === last.ship_type)
     if (ship) setSelected(ship)
+  }
+
+  const handleRandomize = () => {
+    const result: ShipPlacement[] = []
+    const occupied = new Set<string>()
+    for (const ship of STANDARD_FLEET) {
+      let placed = false
+      for (let attempts = 0; attempts < 1000 && !placed; attempts++) {
+        const ori: Orientation = Math.random() < 0.5 ? 'horizontal' : 'vertical'
+        const size = SHIP_SIZES[ship.ship_type]
+        const row = ori === 'vertical'
+          ? Math.floor(Math.random() * (boardSize - size + 1))
+          : Math.floor(Math.random() * boardSize)
+        const col = ori === 'horizontal'
+          ? Math.floor(Math.random() * (boardSize - size + 1))
+          : Math.floor(Math.random() * boardSize)
+        const cells: string[] = []
+        let valid = true
+        for (let i = 0; i < size; i++) {
+          const key = ori === 'horizontal' ? `${row},${col + i}` : `${row + i},${col}`
+          if (occupied.has(key)) { valid = false; break }
+          cells.push(key)
+        }
+        if (valid) {
+          cells.forEach(k => occupied.add(k))
+          result.push({ ship_type: ship.ship_type, orientation: ori, row, col })
+          placed = true
+        }
+      }
+    }
+    setPlacements(result)
+    setSelected(null)
   }
 
   const preview = getPreviewCells()
@@ -159,7 +194,7 @@ export function FleetPlacement({ boardSize, onConfirm, onRandomize }: Props) {
 
       <div className="flex gap-3">
         <button onClick={handleUndo} disabled={placements.length === 0} className="cyber-btn">Undo</button>
-        <button onClick={onRandomize} className="cyber-btn">Randomize</button>
+        <button onClick={handleRandomize} className="cyber-btn">Randomize</button>
         <button onClick={() => onConfirm(placements)} disabled={!isReady} className="cyber-btn">
           {isReady ? 'Confirm Fleet' : `Place ${remaining.length} more`}
         </button>

@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.game.models import BoardSize, DifficultyMode
+from backend.game.models import BoardSize, DifficultyMode, GamePhase
 from backend.api.orchestrator import get_orchestrator, AIMode, GameOrchestrator
 from backend.db.database import get_db
 from backend.db.repository import MatchRepository
@@ -170,6 +170,32 @@ async def fire(
         )
 
     return event
+
+
+@router.post("/games/{game_id}/forfeit")
+async def forfeit_game(
+    game_id: str,
+    orchestrator: GameOrchestrator = Depends(get_orchestrator),
+    db: Session = Depends(get_db),
+):
+    try:
+        session = orchestrator.get_session(game_id)
+    except KeyError:
+        raise HTTPException(404, "Game not found")
+
+    session.engine.state.phase  = GamePhase.GAME_OVER
+    session.engine.state.winner = "player2"
+
+    if session.match_id:
+        repo = MatchRepository(db)
+        repo.close_match(
+            match_id=session.match_id,
+            winner="player2",
+            total_turns=session.engine.state.turn_number,
+            duration_seconds=0,
+        )
+
+    return {"forfeited": True, "winner": "player2"}
 
 
 @router.get("/games/{game_id}/state")
